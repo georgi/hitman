@@ -1,7 +1,5 @@
-#include "http-parser/http_parser.h"
-
 #include <netinet/in.h>    
-#include "pthread.h"
+#include <pthread.h>
 
 typedef struct header {
     char *name;
@@ -13,7 +11,7 @@ typedef struct request {
     int fd;
     int complete;
     int header_state;
-    enum http_method method;
+    int method;
     unsigned int content_length;
     char *path;
     header *headers;
