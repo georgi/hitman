@@ -99,7 +99,7 @@ static int on_message_complete(http_parser *parser) {
     return 0;
 }
 
-http_parser_settings parser_settings = {
+static http_parser_settings parser_settings = {
     .on_message_begin = on_message_begin,
     .on_url = on_url,
     .on_body = on_body,
