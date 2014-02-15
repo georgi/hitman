@@ -9,6 +9,7 @@
 #include <errno.h>
 
 #include "hitman.h"
+#include "http-parser/http_parser.h"
 #include "sds/sds.h"
 
 #define BACKLOG 5
