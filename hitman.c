@@ -153,7 +153,7 @@ static void handle_request(int fd, handler *handlers) {
     if (parse_request(request) == 0) {
         handler *handler = handlers;
         while (handler != NULL) {
-            if (strcmp(handler->pattern, request->path) == 0) {
+            if (strncmp(handler->pattern, request->path, strlen(handler->pattern)) == 0) {
                 handler->handle(request);
                 goto cleanup;
             }
