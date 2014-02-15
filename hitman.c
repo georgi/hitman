@@ -6,11 +6,12 @@
 #include <sys/stat.h>    
 #include <sys/types.h>    
 #include <unistd.h>    
+#include <errno.h>
 
 #include "hitman.h"
 #include "sds/sds.h"
 
-#define BACKLOG 10
+#define BACKLOG 5
 
 void add_handler(server *server, char *pattern, void (*handle)(request *request)) {
     handler *handler = malloc(sizeof(handler));
@@ -70,8 +71,7 @@ static int on_header_field(http_parser *parser, const char *at, size_t len) {
         header = request->headers;
     }
 
-    sds s = sdsnewlen(at, len);
-    header->name = header->name == NULL ? s : sdscatsds(header->name, s);
+    header->name = sdscatlen(header->name == NULL ? sdsempty() : header->name, at, len);
     request->header_state = 1;
 
     return 0;
@@ -80,9 +80,7 @@ static int on_header_field(http_parser *parser, const char *at, size_t len) {
 static int on_header_value(http_parser *parser, const char *at, size_t len) {
     request *request = parser->data;
     header *header = request->headers;
-
-    sds s = sdsnewlen(at, len);
-    header->value = header->value == NULL ? s : sdscatsds(header->value, s);
+    header->value = sdscatlen(header->value == NULL ? sdsempty() : header->value, at, len);
     request->header_state = 2;
     return 0;
 }
@@ -146,15 +144,13 @@ int parse_request(request *request) {
     return 0;
 }
         
-void *run_thead(void *ptr) {
-    server_thread *thread = ptr;
-
+void handle_request(int fd, handler *handlers) {
     request *request = malloc(sizeof(struct request));
     memset(request, 0, sizeof(struct request));
-    request->fd = thread->fd;
+    request->fd = fd;
 
     if (parse_request(request) == 0) {
-        handler *handler = thread->server->handlers;
+        handler *handler = handlers;
         while (handler != NULL) {
             if (strcmp(handler->pattern, request->path) == 0) {
                 handler->handle(request);
@@ -168,8 +164,15 @@ void *run_thead(void *ptr) {
     }
 
  cleanup:
-    close(request->fd);
+    close(fd);
     free_request(request);
+}
+
+void *run_thead(void *ptr) {
+    server_thread *thread = ptr;
+    pthread_detach(thread->thread);
+    handle_request(thread->fd, thread->server->handlers);
+    free(thread);
     return NULL;
 }
     
@@ -185,13 +188,13 @@ int http_serve(server *server) {
         perror("could not bind address");
         return -1;
     }
+
+    if (listen(sock, BACKLOG) < 0) {    
+        perror("could not listen on socket");    
+        return -1;
+    }    
     
     while (1) {    
-        if (listen(sock, BACKLOG) < 0) {    
-            perror("could not listen on socket");    
-            return -1;
-        }    
-    
         socklen_t addrlen;    
 
         if ((fd = accept(sock, (struct sockaddr *) &server->address, &addrlen)) == 0) {    
@@ -202,7 +205,11 @@ int http_serve(server *server) {
         server_thread *thread = malloc(sizeof(server_thread));
         thread->fd = fd;
         thread->server = server;
-        pthread_create(&thread->thread, NULL, run_thead, (void *) thread);
+
+        if (pthread_create(&thread->thread, NULL, run_thead, (void *) thread) != 0) {
+            perror("could not create thread");    
+            exit(1);
+        }
     }    
 
     close(sock);

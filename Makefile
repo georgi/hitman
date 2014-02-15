@@ -1,11 +1,2 @@
-OUTPUT := hitman.a
-OBJ := hitman.o http-parser/libhttp_parser.o sds/sds.o
-
-build: $(OBJ)
-	ar rcs $(OUTPUT) $(OBJ)
-
-%.o: %.c
-	gcc -g -Wall -c $< -o $@
-
-http-parser/libhttp_parser.o:
-	cd http-parser && make libhttp_parser.o
+hitman: hitman.c main.c
+	gcc hitman.c http-parser/http_parser.c sds/sds.c main.c -o hitman
