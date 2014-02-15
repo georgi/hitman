@@ -40,19 +40,19 @@ void write_body(request *request, char *body) {
     write(request->fd, body, strlen(body));
 }
 
-int on_url(http_parser *parser, const char *at, size_t len) {
+static int on_url(http_parser *parser, const char *at, size_t len) {
     request *request = parser->data;
     request->path = sdsnewlen(at, len);
     return 0;
 }
 
-int on_body(http_parser *parser, const char *at, size_t len) {
+static int on_body(http_parser *parser, const char *at, size_t len) {
     request *request = parser->data;
     request->body = sdscatlen(request->body, at, len);
     return 0;
 }
     
-int on_message_begin(http_parser *parser) {
+static int on_message_begin(http_parser *parser) {
     request *request = parser->data;
     request->body = sdsempty();
     return 0;
@@ -86,14 +86,14 @@ static int on_header_value(http_parser *parser, const char *at, size_t len) {
     return 0;
 }
 
-int on_headers_complete(http_parser *parser) {
+static int on_headers_complete(http_parser *parser) {
     request *request = parser->data;
     request->content_length = parser->content_length;
     request->method = parser->method;
     return 0;
 }
 
-int on_message_complete(http_parser *parser) {
+static int on_message_complete(http_parser *parser) {
     request *request = parser->data;
     request->complete = 1;
     return 0;
@@ -145,7 +145,7 @@ int parse_request(request *request) {
     return 0;
 }
         
-void handle_request(int fd, handler *handlers) {
+static void handle_request(int fd, handler *handlers) {
     request *request = malloc(sizeof(struct request));
     memset(request, 0, sizeof(struct request));
     request->fd = fd;
@@ -169,7 +169,7 @@ void handle_request(int fd, handler *handlers) {
     free_request(request);
 }
 
-void *run_thead(void *ptr) {
+static void *run_thead(void *ptr) {
     server_thread *thread = ptr;
     pthread_detach(thread->thread);
     handle_request(thread->fd, thread->server->handlers);
