@@ -12,9 +12,35 @@
 
 #define BACKLOG 10
 
+void add_handler(server *server, char *pattern, void (*handle)(request *request)) {
+    handler *handler = malloc(sizeof(handler));
+    handler->handle = handle;
+    handler->pattern = sdsnew(pattern);
+    handler->next = server->handlers;
+    server->handlers = handler;
+}
+
+void write_header(request *request, char *name, char *value) {
+    sds s = sdsempty();
+    s = sdscatprintf(s, "%s: %s\r\n", name, value);
+    write(request->fd, s, sdslen(s));
+    sdsfree(s);
+}
+
+void write_status(request *request, int status, char *reason) {
+    sds s = sdsempty();
+    s = sdscatprintf(s, "HTTP/1.1 %d %s\r\n", status, reason);
+    write(request->fd, s, sdslen(s));
+}
+
+void write_body(request *request, char *body) {
+    write(request->fd, "\r\n", 2);
+    write(request->fd, body, strlen(body));
+}
+
 int on_url(http_parser *parser, const char *at, size_t len) {
     request *request = parser->data;
-    request->url = sdsnewlen(at, len);
+    request->path = sdsnewlen(at, len);
     return 0;
 }
 
@@ -84,75 +110,102 @@ http_parser_settings parser_settings = {
     .on_message_complete = on_message_complete,
 };
 
-request *handle_client(int fd) {
-    char buf[1];
-    int ret;
+void free_request(request *request) {
+    header *header = request->headers;
 
-    request *request = malloc(sizeof(struct request));
-    memset(request, 0, sizeof(struct request));
+    while (header != NULL) {
+        struct header *prev = header;
+        sdsfree(header->name);
+        sdsfree(header->value);
+        header = header->next;
+        free(prev);
+    }
+    
+    sdsfree(request->body);
+    sdsfree(request->path);
+
+    free(request);
+}
+
+int parse_request(request *request) {
+    char buf[4096];
+    int ret;
 
     http_parser parser;
     http_parser_init(&parser, HTTP_REQUEST);
 
     parser.data = request;
 
-    while ((ret = read(fd, buf, sizeof(buf))) > 0) {
+    while ((ret = read(request->fd, buf, sizeof(buf))) > 0) {
         if (http_parser_execute(&parser, &parser_settings, buf, ret) != (size_t) ret) {
-            fprintf(stderr, "parse error\n");
-            break;
+            return -1;
         }
         if (request->complete) break;
     }
     
-    return request;
+    return 0;
+}
+        
+void *run_thead(void *ptr) {
+    server_thread *thread = ptr;
+
+    request *request = malloc(sizeof(struct request));
+    memset(request, 0, sizeof(struct request));
+    request->fd = thread->fd;
+
+    if (parse_request(request) == 0) {
+        handler *handler = thread->server->handlers;
+        while (handler != NULL) {
+            if (strcmp(handler->pattern, request->path) == 0) {
+                handler->handle(request);
+                goto cleanup;
+            }
+            handler = handler->next;
+        }
+        write_status(request, 500, "INTERNAL SERVER ERROR");
+    } else {
+        write_status(request, 400, "BAD REQUEST");
+    }
+
+ cleanup:
+    close(request->fd);
+    free_request(request);
+    return NULL;
 }
     
-int main() {    
-    int sock, conn;
-
-    socklen_t addrlen;    
-    struct sockaddr_in address;    
+int http_serve(server *server) {    
+    int sock, fd;
  
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1){    
-        perror("socket");
-        exit(1);
+        perror("could not open socket");
+        return -1;
     }
     
-    address.sin_family = AF_INET;    
-    address.sin_addr.s_addr = INADDR_ANY;    
-    address.sin_port = htons(3000);    
-    
-    if (bind(sock, (struct sockaddr *) &address, sizeof(address)) != 0) {    
-        perror("bind");
+    if (bind(sock, (struct sockaddr *) &server->address, sizeof(server->address)) != 0) {    
+        perror("could not bind address");
+        return -1;
     }
     
     while (1) {    
         if (listen(sock, BACKLOG) < 0) {    
-            perror("listen");    
-            exit(1);    
+            perror("could not listen on socket");    
+            return -1;
         }    
     
-        if ((conn = accept(sock, (struct sockaddr *) &address, &addrlen)) < 0) {    
-            perror("server: accept");    
-            exit(1);    
-        }    
-        
-        request *request = handle_client(conn);
+        socklen_t addrlen;    
 
-        if (request != NULL) {
-            header *header = request->headers;
-
-            while (header != NULL) {
-                printf("%s %s\n", header->name, header->value);
-                header = header->next;
-            }
-
-            write(conn, "<h1>HELLO</1>", 12);
+        if ((fd = accept(sock, (struct sockaddr *) &server->address, &addrlen)) == 0) {    
+            perror("could not accept socket");    
+            exit(1);
         }
 
-        close(conn);
+        server_thread *thread = malloc(sizeof(server_thread));
+        thread->fd = fd;
+        thread->server = server;
+        pthread_create(&thread->thread, NULL, run_thead, (void *) thread);
     }    
 
     close(sock);
+
     return 0;    
 }
